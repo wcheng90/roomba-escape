@@ -21,15 +21,20 @@ using Cairo
 using Gtk
 using Random
 using Printf
+using POMDPModels, BasicPOMCP
+
+vlist = [0, 5, 10]
+omlist = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+aspace = vec(collect(RoombaAct(v, om) for v in vlist, om in omlist))
 
 sensor = Bumper() #Lidar() # or Bumper() for the bumper version of the environment
-config = 1 # 1,2, or 3
-m = RoombaPOMDP(sensor=sensor, mdp=RoombaMDP(config=config));
+config = 3 # 1,2, or 3
+m = RoombaPOMDP(sensor=sensor, mdp=RoombaMDP(config=config, aspace=aspace))
 
 num_particles = 2000
-resampler = LidarResampler(num_particles, LowVarianceResampler(num_particles))
+# resampler = LidarResampler(num_particles, LowVarianceResampler(num_particles))
 # for the bumper environment
-# resampler = BumperResampler(num_particles)
+resampler = BumperResampler(num_particles)
 
 spf = SimpleParticleFilter(m, resampler)
 
@@ -91,11 +96,11 @@ function POMDPs.action(p::ToEnd, b::ParticleCollection{RoombaState})
     ang_to_goal = atan(goal_y - y, goal_x - x)
 
 #    @printf "Delta X: %d; Delta Y: %d \n" del_x del_y
-
-    if AA228FinalProject.wall_contact(m, particles(b)[1])
-        ang_to_goal = ang_to_goal + 1
+    if length(particles(b)) > 0
+        if AA228FinalProject.wall_contact(m, particles(b)[1])
+            ang_to_goal = ang_to_goal + rand(-2.0:2.0)
+        end
     end
-
    
     del_angle = wrap_to_pi(ang_to_goal - th)
 #    @printf "Belief Theta: %d \n" th
@@ -110,38 +115,59 @@ function POMDPs.action(p::ToEnd, b::ParticleCollection{RoombaState})
 #	    v = 1.0
 #    else
 #    	v = 2.0
-#    end
     v = 5.0
     return RoombaAct(v, om)
 end
 
+#function evaluate(b::ParticleCollection{RoombaState})
+#    goal_x, goal_y = goal_xy
+#    s = mean(b)
+#    x,y,th = s[1:3]
+#    distance = (goal_x - x)**2 + (goal_y - y)**2
+#    return 5*(1/distance)
+#end
+
 # first seed the environment
-Random.seed!(2)
+Random.seed!(3)
 
 # reset the policy
 p = ToEnd(0) # here, the argument sets the time-steps elapsed to 0
 #p = RandomPolicy(m)
+solver = POMCPSolver(default_action=p)#estimate_value=FORollout(p))
+planner = solve(solver, m)
 
 # run the simulation
 c = @GtkCanvas()
 win = GtkWindow(c, "Roomba Environment", 600, 600)
-for (t, step) in enumerate(stepthrough(m, p, belief_updater, max_steps=100))
-    @guarded draw(c) do widget
-#	println(typeof(step))
-        #@printf "Time Step: %d; SARS: {} \n" t step#"Time Step: {}; SARS: {}".format(t, step)
-        # the following lines render the room, the particles, and the roomba
-        ctx = getgc(c)
-        set_source_rgb(ctx,1,1,1)
-        paint(ctx)
-        render(ctx, m, step)
-        
-        # render some information that can help with debugging
-        # here, we render the time-step, the state, and the observation
-        move_to(ctx,300,400)
-        show_text(ctx, @sprintf("t=%d, state=%s, o=%.3f",t,string(step.s),step.o))
+
+
+#for (s, a, o) in stepthrough(m, planner, "sao", max_steps=10)
+#    println("State was $s,")
+#    println("action $a was taken,")
+#    println("and observation $o was received.\n")
+#    sleep(0.1)
+#end
+
+
+for exp = 1:5
+    Random.seed!(exp)
+    for (t, step) in enumerate(stepthrough(m, planner, belief_updater, max_steps=100))
+        @guarded draw(c) do widget
+            #@printf "Time Step: %d; SARS: {} \n" t step#"Time Step: {}; SARS: {}".format(t, step)
+            # the following lines render the room, the particles, and the roomba
+            ctx = getgc(c)
+            set_source_rgb(ctx,1,1,1)
+            paint(ctx)
+            render(ctx, m, step)
+            
+            # render some information that can help with debugging
+            # here, we render the time-step, the state, and the observation
+            move_to(ctx,300,400)
+            show_text(ctx, @sprintf("t=%d, state=%s, o=%.3f",t,string(step.s),step.o))
+        end
+        show(c)
+        sleep(0.1) # to slow down the simulation
     end
-    show(c)
-    sleep(0.1) # to slow down the simulation
 end
 
 using Statistics
@@ -154,7 +180,7 @@ for exp = 1:5
     Random.seed!(exp)
     
     p = ToEnd(0)
-    traj_rewards = sum([step.r for step in stepthrough(m,p,belief_updater, max_steps=100)])
+    traj_rewards = sum([step.r for step in stepthrough(m,planner ,belief_updater, max_steps=100)])
     
     push!(total_rewards, traj_rewards)
 end
